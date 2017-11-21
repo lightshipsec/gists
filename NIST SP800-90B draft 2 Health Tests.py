@@ -39,8 +39,8 @@ from __future__ import print_function
 import os, sys, math, collections
 
 try:
-    VERBOSE = True if os.environ['DEBUG'] == '2' else False
-    DEBUG   = VERBOSE or (True if os.environ['DEBUG'] == '1' else False)
+    VERBOSE = True if int(os.environ['DEBUG']) >= 2 else False
+    DEBUG   = True if int(os.environ['DEBUG']) >= 1 else False
 except:
     VERBOSE = False
     DEBUG = False
