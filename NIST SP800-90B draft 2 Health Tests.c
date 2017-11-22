@@ -89,7 +89,7 @@ int getRawSample(FILE *noise, Sample *sample)  {
     /**
      * Get a single raw entropy noise sample. In our example, the sample is a 
      * byte.
-     * Returns ENODATA if no data is available or 0 if data was read.
+     * Returns ENODATA if no data is available or 0 is data was read.
      * Data is returned back via the passed in sample pointer.
      */
     if(!sample) return ENODATA;
@@ -109,10 +109,12 @@ int samplesAreEqual(Sample sample1, Sample sample2)  {
 }
 
 
+/* I just don't want to have to link math library for the ceiling function */
+#define CEIL(x)     ( (x) < 0.0 ? (int)(x) : (int)((x)+1.0) )
 
 static Sample repetitionCountTestA = 0;
 static unsigned int repetitionCountTestB = 1;
-static unsigned int repetitionCountTestC = 0;    /* initialized properly in mainline */
+static unsigned int repetitionCountTestC = (unsigned int)(CEIL(1 + (40 / _H)));
 
 int repetitionCountTest(unsigned char sample)  {
     /**
@@ -138,11 +140,40 @@ int repetitionCountTest(unsigned char sample)  {
 }
 
 
+struct circularBuffer  {
+    Sample buf[_W];
+    int i;  /* insertion point */
+    int n;  /* Current number of items in the buffer */
+};
+int cb_append(struct circularBuffer *cb, Sample c)  {
+    cb->buf[cb->i % _W] = c;
+    cb->i++;
+    if( cb->n >= _W ) cb->n = _W;
+    else cb->n++;
+    return 0;
+}
+int cb_clear(struct circularBuffer *cb)  {
+    cb->n = 0;
+    cb->i = 0;
+    return 0;
+}
+int cb_print(struct circularBuffer *cb)  {
+    /* Print out the circular buffer similar to the Python format */
+    printf("[");
+    for (int i = 0; i < cb->n-1; i ++)
+        printf("'%s', ", toBinaryValue(cb->buf[(cb->i + i) % _W]));
+    /* Print last value, which must not have a comma */
+    printf("'%s']\n", toBinaryValue(cb->buf[(cb->i + cb->n - 1) % _W]));
+    return 0;
+}
+
+
 static Sample adaptiveProportionTestA = 0;
 static unsigned int adaptiveProportionTestB = 1;
 static unsigned int adaptiveProportionTestC = AdPC;
 static unsigned int adaptiveProportionTestW = _W;
 static unsigned int adaptiveProportionTestSampleN = 1;
+static struct circularBuffer q; /* Everything init'd to 0 since static allocation */
 
 int adaptiveProportionTest(Sample sample) {
     /**
@@ -151,6 +182,8 @@ int adaptiveProportionTest(Sample sample) {
      * Returns zero if everything went well, else returns non-zero if there is a health
      * test failure.
      */
+
+    debug && cb_append(&q, sample);
 
     /**
      * Note that while NIST 800-90B draft 2 states the range is from 1..W-1, this
@@ -177,7 +210,7 @@ int adaptiveProportionTest(Sample sample) {
          * statement.
          */
         if (adaptiveProportionTestB > adaptiveProportionTestC)  {
-            /* Print the dequeue here */
+            cb_print(&q);
             printf("Sample %s repeats with threshold %u\n", toBinaryValue(adaptiveProportionTestA), adaptiveProportionTestB);
             return 1;
         }
@@ -186,15 +219,13 @@ int adaptiveProportionTest(Sample sample) {
         adaptiveProportionTestSampleN = 1;
         adaptiveProportionTestB = 1;
         adaptiveProportionTestA = sample;
-        /* Clear dequeue here */
+        debug && cb_clear(&q);
     }
 
     return 0;
 }
 
 
-/* I just don't want to have to link math library for the ceiling function */
-#define CEIL(x)     ( (x) < 0.0 ? (int)(x) : (int)((x)+1.0) )
 
 int main(void)  {
     Sample sample = 0;
@@ -207,8 +238,6 @@ int main(void)  {
         debug = verbose = 0;
     }
 
-    /* Cannot initialize in the data section since this uses a non-constant value math function */
-    repetitionCountTestC = (unsigned int)(CEIL(1 + (40 / _H)));
 
     if ( getRawSample(stdin, &sample) == ENODATA ) failToSample++;
     repetitionCountTestA = sample;
@@ -223,13 +252,12 @@ int main(void)  {
             }
             continue;
         }
-
         failToSample = 0;
         if (repetitionCountTest(sample) != 0)
             goto error;
         if (adaptiveProportionTest(sample) != 0)
             goto error;
-
+        
         /* From here, we can forward the entropy sample onward to the pool. */
         /* ... */
     }
