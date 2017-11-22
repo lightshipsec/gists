@@ -89,7 +89,7 @@ int getRawSample(FILE *noise, Sample *sample)  {
     /**
      * Get a single raw entropy noise sample. In our example, the sample is a 
      * byte.
-     * Returns ENODATA if no data is available or 0 is data was read.
+     * Returns ENODATA if no data is available or 0 if data was read.
      * Data is returned back via the passed in sample pointer.
      */
     if(!sample) return ENODATA;
