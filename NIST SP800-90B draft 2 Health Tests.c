@@ -19,7 +19,7 @@
  * catastrophic RNG failure by biasing on bit pattern 00000000.
  * To make this fail faster, change divisor from 50 to something else, like 2.
  *
-gcc -o NIST\ SP800-90B\ draft\ 2\ Health\ Tests NIST\ SP800-90B\ draft\ 2\ Health\ Tests.c -lm -g
+gcc -o NIST\ SP800-90B\ draft\ 2\ Health\ Tests NIST\ SP800-90B\ draft\ 2\ Health\ Tests.c -g
 python - <<EOT | DEBUG=1 ./NIST\ SP800-90B\ draft\ 2\ Health\ Tests
 import sys, random, time
 random.seed(time.time())
@@ -34,7 +34,6 @@ EOT
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
 #include <errno.h>
 
 
@@ -119,8 +118,8 @@ int repetitionCountTest(unsigned char sample)  {
     /**
      * The repetition test is like an updated version of the stuck-bit test as 
      * per NIST SP800-90B, draft 2.
-	 * Returns zero if everything went well, else returns non-zero if there is a health
-	 * test failure.
+     * Returns zero if everything went well, else returns non-zero if there is a health
+     * test failure.
      */
     if (samplesAreEqual(sample, repetitionCountTestA))  {
         repetitionCountTestB += 1;
@@ -149,8 +148,8 @@ int adaptiveProportionTest(Sample sample) {
     /**
      * The adaptive proportion test checks for repeated values within a 
      * specific window size (W) and is used to detect a large loss of entropy.
-	 * Returns zero if everything went well, else returns non-zero if there is a health
-	 * test failure.
+     * Returns zero if everything went well, else returns non-zero if there is a health
+     * test failure.
      */
 
     /**
@@ -194,11 +193,12 @@ int adaptiveProportionTest(Sample sample) {
 }
 
 
+/* I just don't want to have to link math library for the ceiling function */
+#define CEIL(x)     ( (x) < 0.0 ? (int)(x) : (int)((x)+1.0) )
 
 int main(void)  {
     Sample sample = 0;
     int failToSample = 0;
-    char *errString = "";
 
     if (getenv("DEBUG") != NULL)  {
         verbose = atoi(getenv("DEBUG")) >= 2;
@@ -208,7 +208,7 @@ int main(void)  {
     }
 
     /* Cannot initialize in the data section since this uses a non-constant value math function */
-    repetitionCountTestC = (unsigned int)(ceil(1 + (40 / _H)));
+    repetitionCountTestC = (unsigned int)(CEIL(1 + (40 / _H)));
 
     if ( getRawSample(stdin, &sample) == ENODATA ) failToSample++;
     repetitionCountTestA = sample;
@@ -223,14 +223,15 @@ int main(void)  {
             }
             continue;
         }
-		failToSample = 0;
+
+        failToSample = 0;
         if (repetitionCountTest(sample) != 0)
             goto error;
         if (adaptiveProportionTest(sample) != 0)
             goto error;
-		
-		/* From here, we can forward the entropy sample onward to the pool. */
-		/* ... */
+
+        /* From here, we can forward the entropy sample onward to the pool. */
+        /* ... */
     }
 
 error:
