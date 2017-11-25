@@ -60,7 +60,7 @@ EOT
 
 /**
  * Using Excel, calculate once and fix the value:
- * =CRITBINOM(W, power(2,(-H)),1-power(2,(-40)) 
+ * =CRITBINOM(W, power(2,(-H)),1-power(2,(-40))) 
  * as per footnote 4 in paragraph 936 in NIST SP800-90B 
  * draft 2
  */
