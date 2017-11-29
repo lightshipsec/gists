@@ -137,9 +137,7 @@ def adaptiveProportionTest(sample):
         # If we encountered a large loss of entropy before the window size was
         # up, then we could exit earlier.  However, the algorithm from
         # paragraphs 923 to 928 implies the check is performed only after the
-        # window loop is completed.  I think it is equivalent to exit earlier,
-        # in which case this check can be moved outside of and below this `else'
-        # statement.
+        # window loop is completed.
         if adaptiveProportionTest.B > adaptiveProportionTest.C:
             DEBUG and print("{}".format(["{:08b}".format(ord(i)) for i in q]))
             raise RepetitionError("Sample {:08b} repeats with threshold {}".format(ord(adaptiveProportionTest.A), adaptiveProportionTest.B))
