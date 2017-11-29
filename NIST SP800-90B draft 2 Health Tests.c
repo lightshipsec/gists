@@ -140,14 +140,19 @@ int repetitionCountTest(unsigned char sample)  {
 }
 
 
+/**
+ * Create a very simple circular buffer to track samples as they
+ * are processed. This is only used for debugging purposes and is
+ * not part of the health testing algorithm.
+ */
 struct circularBuffer  {
     Sample buf[_W];
     int i;  /* insertion point */
     int n;  /* Current number of items in the buffer */
 };
 int cb_append(struct circularBuffer *cb, Sample c)  {
-    cb->buf[cb->i % _W] = c;
-    cb->i++;
+    cb->i = ((cb->i + 1) % _W);
+    cb->buf[cb->i] = c;
     if( cb->n >= _W ) cb->n = _W;
     else cb->n++;
     return 0;
@@ -205,9 +210,7 @@ int adaptiveProportionTest(Sample sample) {
          * If we encountered a large loss of entropy before the window size was
          * up, then we could exit earlier.  However, the algorithm from
          * paragraphs 923 to 928 implies the check is performed only after the
-         * window loop is completed.  I think it is equivalent to exit earlier,
-         * in which case this check can be moved outside of and below this `else'
-         * statement.
+         * window loop is completed.
          */
         if (adaptiveProportionTestB > adaptiveProportionTestC)  {
             cb_print(&q);
