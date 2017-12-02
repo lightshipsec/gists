@@ -19,7 +19,7 @@
  * catastrophic RNG failure by biasing on bit pattern 00000000.
  * To make this fail faster, change divisor from 50 to something else, like 2.
  *
-gcc -o NIST\ SP800-90B\ draft\ 2\ Health\ Tests NIST\ SP800-90B\ draft\ 2\ Health\ Tests.c -g
+gcc -o NIST\ SP800-90B\ draft\ 2\ Health\ Tests NIST\ SP800-90B\ draft\ 2\ Health\ Tests.c -g -lm
 python - <<EOT | DEBUG=1 ./NIST\ SP800-90B\ draft\ 2\ Health\ Tests
 import sys, random, time
 random.seed(time.time())
@@ -35,7 +35,7 @@ EOT
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
-
+#include <math.h>
 
 /**
  * These are the values that the implementor needs to determine.
@@ -109,12 +109,10 @@ int samplesAreEqual(Sample sample1, Sample sample2)  {
 }
 
 
-/* I just don't want to have to link math library for the ceiling function */
-#define CEIL(x)     ( (x) < 0.0 ? (int)(x) : (int)((x)+1.0) )
-
 static Sample repetitionCountTestA = 0;
 static unsigned int repetitionCountTestB = 1;
-static unsigned int repetitionCountTestC = (unsigned int)(CEIL(1 + (40 / _H)));
+/* If you don't want to include math lib, precalculate, as this limit never changes. */
+static unsigned int repetitionCountTestC = (unsigned int)(ceil(1 + (40 / _H)));
 
 int repetitionCountTest(unsigned char sample)  {
     /**
