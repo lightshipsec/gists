@@ -120,6 +120,9 @@ static unsigned int repetitionCountTestB = 1;
 /* 20 comes from log_2(2^(-20)), as per SP 800-90B this is a reasonable 
  * choice for Type-I error detection in most applications.
  * It could be between 2^-20 and 2^-40.
+ * An implementer might need to adjust depending on their risk
+ * requirements, but it isn't something vendors are likely to want to play
+ * too much with unless they understand the ramifications.
  */
 static unsigned int repetitionCountTestC = (unsigned int)(1+CEIL(20 / _H));
 
