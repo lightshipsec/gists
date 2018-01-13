@@ -3,7 +3,7 @@
 #
 # Originally authored by Greg McLearn at Lightship Security, Inc.
 #
-# Sample NIST SP800-90B revision 2 mandatory  health tests.  The code is written
+# Sample  NIST  SP800-90B (final)  mandatory  health tests.  The code is written
 # in such a way as to ensure that both health tests are running continuously and 
 # simultaneously.
 #
@@ -17,12 +17,13 @@
 #
 
 #
-# Here is one way to test this on the command-line in  which  we introduce  a 
+# Here is one way to test this on the command-line in  which  we introduce  a
 # catastrophic RNG failure by biasing on bit pattern 00000000.
-# To make this fail faster, change divisor from 50 to something else, like 2.
+# To make this fail faster, change divisor from 50 to something else, like 2
+# or convert to a relational check instead (eg. if b < 200).
 #
 """
-python - <<EOT | DEBUG=1 python NIST\ SP800-90B\ draft\ 2\ Health\ Tests.py
+python - <<EOT | DEBUG=1 python NIST\ SP800-90B\ Health\ Tests.py
 import sys, random, time
 random.seed(time.time())
 while True:
@@ -32,7 +33,7 @@ while True:
    else:
        sys.stdout.write(chr(b))
 EOT
-""" 
+"""
 
 # Originally written for Python 2.7
 from __future__ import print_function
@@ -49,8 +50,8 @@ except:
 # These are the values that the implementor needs to determine.
 # H is determined by quantitative/statistical analysis of the entropy
 # samples. W is set based on whether the entropy samples are binary
-# (then W = 1024) or non-binary (then W = 512).  See paragraphs 918
-# and 919 in NIST SP800-90B draft 2.
+# (then W = 1024) or non-binary (then W = 512).  See section 4.4.2 in
+# NIST SP800-90B.
 
 H = 7.8             # From entropy analysis, min-entropy 
                     # (this is an example only and is not indicative of the 
@@ -59,10 +60,9 @@ H = 7.8             # From entropy analysis, min-entropy
 W = 512             # From review of entropy samples it is NOT binary data
                     # (mainly because we are reading and understanding bytes)
 
-AdPC = 19           # Using Excel, calculate once and fix the value:
-                    # =CRITBINOM(W, power(2,(-H)),1-power(2,(-40))) 
-                    # as per footnote 4 in paragraph 936 in NIST SP800-90B 
-                    # draft 2
+AdPC = 13           # Using Excel, calculate once and fix the value:
+                    # =1+CRITBINOM(W, power(2,(-H)),1-power(2,(-20))) 
+                    # as per footnote 10 in section 4.4.2 of IST SP800-90B.
 
 
 def getRawSample(noise):
@@ -95,12 +95,12 @@ class NoiseSourceReadError(Exception):
 
 def repetitionTest(sample):
     """The repetition test is like an updated version of the stuck-bit test as 
-    per NIST SP800-90B, draft 2.
+    per NIST SP800-90B.
     """
     if samplesAreEqual(sample, repetitionTest.A):
         repetitionTest.B += 1
         DEBUG and print("repetitionTest.B incremented to {}".format(repetitionTest.B))
-        if repetitionTest.B == repetitionTest.C:
+        if repetitionTest.B >= repetitionTest.C:
             raise RepetitionError("Sample {:08b} repeats with threshold {}".format(ord(sample), repetitionTest.B))
     else:
         VERBOSE and print("repetitionTest.B reset".format(repetitionTest.B))
@@ -120,31 +120,51 @@ def adaptiveProportionTest(sample):
     specific window size (W) and is used to detect a large loss of entropy.
     """
 
-    DEBUG and q.append(sample)
-
-    # Note that while NIST 800-90B draft 2 states the range is from 1..W-1, this
+    # Note that while NIST 800-90B states the range is from 1..W-1, this
     # means [1..W) which is identical to 1 <= sampleN < W.
-    # These next few lines actually represent the "for loop" the SP specifies, it's 
+    # The purpose of this is that W samples are being used in the checks.
+    # Since 1 sample is used as the seeding comparator, the loop proceeds for
+    # W-1 additional sample checks against the comparator.  See paragraph 2 in 
+    # NIST SP 800-90B section 4.4.2.
+    # These next few lines actually represent the "for loop" the SP specifies, it's
     # just that we are a re-entrant function.
     if adaptiveProportionTest.sampleN < W:
+        DEBUG and q.append(sample)
         adaptiveProportionTest.sampleN += 1
+
         if samplesAreEqual(sample, adaptiveProportionTest.A):
             adaptiveProportionTest.B += 1
             DEBUG and print("adaptiveProportionTest.B incremented to {}".format(adaptiveProportionTest.B))
-    else:
-        # Once the loop is done, we check how the window fared.
-        # It is unclear why we need to check to the end of the window, however.
-        # If we encountered a large loss of entropy before the window size was
-        # up, then we could exit earlier.  However, the algorithm from
-        # paragraphs 923 to 928 implies the check is performed only after the
-        # window loop is completed.
-        if adaptiveProportionTest.B > adaptiveProportionTest.C:
+
+        if adaptiveProportionTest.B >= adaptiveProportionTest.C:
             DEBUG and print("{}".format(["{:08b}".format(ord(i)) for i in q]))
             raise RepetitionError("Sample {:08b} repeats with threshold {}".format(ord(adaptiveProportionTest.A), adaptiveProportionTest.B))
 
+    else:
         VERBOSE and print("adaptiveProportionTest.sampleN reset")
         adaptiveProportionTest.sampleN = 1
         adaptiveProportionTest.B = 1
+        # To be crystal clear here as to what 'sample' will be relative to
+        # repeated calls, let's analyze the flow just when 
+        #  adaptiveProportionTest.sampleN is about to exceed 
+        #  W.
+        #  So adaptiveProportionTest.sampleN < W
+        #  continues to hold true so the 'if' branch above will run.
+        #  adaptiveProportionTest.sampleN is incremented meaning that the
+        #  NEXT time this function is entered, the 'if' relation will no
+        #  longer hold.  However, the NEXT iteration will have a new
+        #  'sample' value which is similar to 'A=next()' from Step 1
+        #  in the NIST SP Step 4 of the algorithm in 4.4.2.
+        #  
+        #  At this point, this 'else' code path is entered and 'sample'
+        #  will be assigned to adaptiveProportionTest.A but not used for any
+        #  other comparison purposes.
+        #  adaptiveProportionTest.sampleN and adaptiveProportionTest.sampleB
+        #  are reset to 1 and that will ultimately reset the window check
+        #  so that subsequent calls will enter the 'if' branch above.
+        #  
+        #  Therefore, the logic shown here appears to match that given in
+        #  section 4.4.2.
         adaptiveProportionTest.A = sample
         DEBUG and q.clear()
 
@@ -152,21 +172,26 @@ def adaptiveProportionTest(sample):
 
 # Get an initial bootstrap sample
 sample = getRawSample(sys.stdin)
+if not sample:
+    failToSample += 1
 
-# Initialize to the required values in NIST SP800-90B, draft 2
+# Initialize to the required values in NIST SP800-90B
 repetitionTest.A = sample
 repetitionTest.B = 1
-# 40 comes from log_2(2^(-40)), as per paragraph 867, this is a reasonable 
-# choice; an implementer might want to adjust depending on their risk
+# 20 comes from log_2(2^(-20)), as per SP 800-90B this is a reasonable 
+# choice for Type-I error detection in most applications.
+# It could be between 2^-20 and 2^-40.
+# An implementer might need to adjust depending on their risk
 # requirements, but it isn't something vendors are likely to want to play
 # too much with unless they understand the ramifications.
-repetitionTest.C = int(math.ceil(1 + (40 / H)))
+repetitionTest.C = 1+int(math.ceil(20 / H))
 
 adaptiveProportionTest.A = sample
 adaptiveProportionTest.B = 1
 adaptiveProportionTest.C = AdPC 
 adaptiveProportionTest.W = W
 adaptiveProportionTest.sampleN = 1
+
 
 # We will also track cases in which the noise source fails to provide any 
 # data at all.  Bootstrap with the result of the initial sample result.
