@@ -1,7 +1,7 @@
 /**
  * Originally authored by Greg McLearn at Lightship Security, Inc.
  *
- * Sample NIST SP800-90B revision 2 mandatory  health tests.  The code is written
+ * Sample  NIST  SP800-90B (final)  mandatory  health tests.  The code is written
  * in such a way as to ensure that both health tests are running continuously and 
  * simultaneously.
  *
@@ -17,10 +17,11 @@
  *
  * Here is one way to test this on the command-line in  which  we introduce  a 
  * catastrophic RNG failure by biasing on bit pattern 00000000.
- * To make this fail faster, change divisor from 50 to something else, like 2.
+ * To make this fail faster, change divisor from 50 to something else, like 2
+ * or convert to a relational check instead (eg. if b < 200).
  *
-gcc -o NIST\ SP800-90B\ draft\ 2\ Health\ Tests NIST\ SP800-90B\ draft\ 2\ Health\ Tests.c -g
-python - <<EOT | DEBUG=1 ./NIST\ SP800-90B\ draft\ 2\ Health\ Tests
+gcc -o NIST\ SP800-90B\ Health\ Tests NIST\ SP800-90B\ Health\ Tests.c -g
+python - <<EOT | DEBUG=1 ./NIST\ SP800-90B\ Health\ Tests
 import sys, random, time
 random.seed(time.time())
 while True:
@@ -36,12 +37,13 @@ EOT
 #include <stdlib.h>
 #include <errno.h>
 
+
 /**
  * These are the values that the implementor needs to determine.
  * H is determined by quantitative/statistical analysis of the entropy
  * samples. W is set based on whether the entropy samples are binary
- * (then W = 1024) or non-binary (then W = 512).  See paragraphs 918
- * and 919 in NIST SP800-90B draft 2.
+ * (then W = 1024) or non-binary (then W = 512).  See section 4.4.2 in
+ * NIST SP800-90B.
  */
 
 /**
@@ -59,17 +61,16 @@ EOT
 
 /**
  * Using Excel, calculate once and fix the value:
- * =CRITBINOM(W, power(2,(-H)),1-power(2,(-40))) 
- * as per footnote 4 in paragraph 936 in NIST SP800-90B 
- * draft 2
+ * =1+CRITBINOM(W, power(2,(-H)),1-power(2,(-20)) 
+ * as per footnote 10 in section 4.4.2 of NIST SP800-90B.
  */
-#define AdPC (19)
+#define AdPC (13)
 
 
 typedef unsigned char Sample;
 
-static int verbose = 0;
-static int debug = 0;
+static int VERBOSE = 0;
+static int DEBUG = 0;
 
 
 unsigned char *toBinaryValue(Sample c)  {
@@ -93,7 +94,7 @@ int getRawSample(FILE *noise, Sample *sample)  {
      */
     if(!sample) return ENODATA;
     if( fscanf(noise, "%c", sample) == EOF ) return ENODATA;
-    verbose && printf("Noise sample %s\n", toBinaryValue(*sample));
+    VERBOSE && printf("Noise sample %s\n", toBinaryValue(*sample));
     return 0;
 }
 
@@ -107,31 +108,34 @@ int samplesAreEqual(Sample sample1, Sample sample2)  {
     return sample1 == sample2;
 }
 
-/* I just don't want to have to link math library for the ceiling function.
- * Note you can always dispense with math lib and CEIL macro and just precalc
- * but it would be less transparent in this gist.
- */
-#define CEIL(x)     ( (x) < 0.0 ? (int)(x) : ( (float)((int)(x)) == (x) ? (int)(x) : (int)((x)+1.0) ) )
+
+/* I just don't want to have to link math library for the ceiling function */
+#define CEIL(x)     ( (x) < 0.0 ? (int)(x) : (int)((x)+1.0) )
+
 static Sample repetitionCountTestA = 0;
 static unsigned int repetitionCountTestB = 1;
-static unsigned int repetitionCountTestC = (unsigned int)(CEIL(1 + (40 / _H)));
+/* 20 comes from log_2(2^(-20)), as per SP 800-90B this is a reasonable 
+ * choice for Type-I error detection in most applications.
+ * It could be between 2^-20 and 2^-40.
+ */
+static unsigned int repetitionCountTestC = (unsigned int)(1+CEIL(20 / _H));
 
 int repetitionCountTest(unsigned char sample)  {
     /**
      * The repetition test is like an updated version of the stuck-bit test as 
-     * per NIST SP800-90B, draft 2.
+     * per NIST SP800-90B.
      * Returns zero if everything went well, else returns non-zero if there is a health
      * test failure.
      */
     if (samplesAreEqual(sample, repetitionCountTestA))  {
         repetitionCountTestB += 1;
-        debug && printf("repetitionTest.B incremented to %u\n", repetitionCountTestB);
-        if (repetitionCountTestB == repetitionCountTestC)  {
+        DEBUG && printf("repetitionTest.B incremented to %u\n", repetitionCountTestB);
+        if (repetitionCountTestB >= repetitionCountTestC)  {
             printf("Sample %s repeats with threshold %u\n", toBinaryValue(sample), repetitionCountTestB);
             return 1;
         }
     } else  {
-        verbose && printf("repetitionTest.B reset\n", repetitionCountTestB);
+        VERBOSE && printf("repetitionTest.B reset\n", repetitionCountTestB);
         repetitionCountTestA = sample;
         repetitionCountTestB = 1;
     }
@@ -140,19 +144,14 @@ int repetitionCountTest(unsigned char sample)  {
 }
 
 
-/**
- * Create a very simple circular buffer to track samples as they
- * are processed. This is only used for debugging purposes and is
- * not part of the health testing algorithm.
- */
 struct circularBuffer  {
     Sample buf[_W];
     int i;  /* insertion point */
     int n;  /* Current number of items in the buffer */
 };
 int cb_append(struct circularBuffer *cb, Sample c)  {
-    cb->i = ((cb->i + 1) % _W);
     cb->buf[cb->i] = c;
+    cb->i = (cb->i + 1) % _W;
     if( cb->n >= _W ) cb->n = _W;
     else cb->n++;
     return 0;
@@ -165,10 +164,12 @@ int cb_clear(struct circularBuffer *cb)  {
 int cb_print(struct circularBuffer *cb)  {
     /* Print out the circular buffer similar to the Python format */
     printf("[");
-    for (int i = 0; i < cb->n-1; i ++)
-        printf("'%s', ", toBinaryValue(cb->buf[(cb->i + i) % _W]));
+    int start = (cb->i == cb->n ? 0 : cb->i);
+    for (int i = 0; i < cb->n-1; i ++) {
+        printf("'%s', ", toBinaryValue(cb->buf[(start + i) % _W]));
+    }
     /* Print last value, which must not have a comma */
-    printf("'%s']\n", toBinaryValue(cb->buf[(cb->i + cb->n - 1) % _W]));
+    printf("'%s']\n", toBinaryValue(cb->buf[(start + cb->n-1) % _W]));
     return 0;
 }
 
@@ -188,41 +189,59 @@ int adaptiveProportionTest(Sample sample) {
      * test failure.
      */
 
-    debug && cb_append(&q, sample);
-
     /**
-     * Note that while NIST 800-90B draft 2 states the range is from 1..W-1, this
+     * Note that while NIST 800-90B states the range is from 1..W-1, this
      * means [1..W) which is identical to 1 <= sampleN < W.
+     * The purpose of this is that W samples are being used in the checks.
+     * Since 1 sample is used as the seeding comparator, the loop proceeds for
+     * W-1 additional sample checks against the comparator.  See paragraph 2 in 
+     * NIST SP 800-90B section 4.4.2.
      * These next few lines actually represent the "for loop" the SP specifies, it's 
      * just that we are a re-entrant function.
      */
     if (adaptiveProportionTestSampleN < adaptiveProportionTestW)  {
+        DEBUG && cb_append(&q, sample);
         adaptiveProportionTestSampleN ++;
+
         if (samplesAreEqual(sample, adaptiveProportionTestA))  {
             adaptiveProportionTestB++;
-            debug && printf("adaptiveProportionTest.B incremented to %u\n", adaptiveProportionTestB);
+            DEBUG && printf("adaptiveProportionTest.B incremented to %u\n", adaptiveProportionTestB);
         }
-    }
-    else  {
-        /**
-         * Once the loop is done, we check how the window fared.
-         * It is unclear why we need to check to the end of the window, however.
-         * If we encountered a large loss of entropy before the window size was
-         * up, then we could exit earlier.  However, the algorithm from
-         * paragraphs 923 to 928 implies the check is performed only after the
-         * window loop is completed.
-         */
-        if (adaptiveProportionTestB > adaptiveProportionTestC)  {
-            cb_print(&q);
+
+        if (adaptiveProportionTestB >= adaptiveProportionTestC)  {
+            DEBUG && cb_print(&q);
             printf("Sample %s repeats with threshold %u\n", toBinaryValue(adaptiveProportionTestA), adaptiveProportionTestB);
             return 1;
         }
-
-        verbose && printf("adaptiveProportionTest.sampleN reset\n");
+    }
+    else  { 
+        VERBOSE && printf("adaptiveProportionTest.sampleN reset\n");
         adaptiveProportionTestSampleN = 1;
         adaptiveProportionTestB = 1;
+        /* To be crystal clear here as to what 'sample' will be relative to
+         * repeated calls, let's analyze the flow just when 
+         * adaptiveProportionTestSampleN is about to exceed 
+         * adaptiveProportionTestW.
+         * So adaptiveProportionTestSampleN < adaptiveProportionTestW
+         * continues to hold true so the 'if' branch above will run.
+         * adaptiveProportionTestSampleN is incremented meaning that the
+         * NEXT time this function is entered, the 'if' relation will no
+         * longer hold.  However, the NEXT iteration will have a new
+         * 'sample' value which is similar to 'A=next()' from Step 1
+         * in the NIST SP Step 4 of the algorithm in 4.4.2.
+         * 
+         * At this point, this 'else' code path is entered and 'sample'
+         * will be assigned to adaptiveProportionTestA but not used for any
+         * other comparison purposes.
+         * adaptiveProportionTestSampleN and adaptiveProportionTestSampleB
+         * are reset to 1 and that will ultimately reset the window check
+         * so that subsequent calls will enter the 'if' branch above.
+         * 
+         * Therefore, the logic shown here appears to match that given in
+         * section 4.4.2.
+         */
         adaptiveProportionTestA = sample;
-        debug && cb_clear(&q);
+        DEBUG && cb_clear(&q);
     }
 
     return 0;
@@ -235,10 +254,10 @@ int main(void)  {
     int failToSample = 0;
 
     if (getenv("DEBUG") != NULL)  {
-        verbose = atoi(getenv("DEBUG")) >= 2;
-        debug = atoi(getenv("DEBUG")) >= 1;
+        VERBOSE = atoi(getenv("DEBUG")) >= 2;
+        DEBUG = atoi(getenv("DEBUG")) >= 1;
     } else {
-        debug = verbose = 0;
+        DEBUG = VERBOSE = 0;
     }
 
 
