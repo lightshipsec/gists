@@ -61,7 +61,7 @@ EOT
 
 /**
  * Using Excel, calculate once and fix the value:
- * =1+CRITBINOM(W, power(2,(-H)),1-power(2,(-20)) 
+ * =1+CRITBINOM(W, power(2,(-H)),1-power(2,(-20))) 
  * as per footnote 10 in section 4.4.2 of NIST SP800-90B.
  */
 #define AdPC (13)
@@ -109,8 +109,11 @@ int samplesAreEqual(Sample sample1, Sample sample2)  {
 }
 
 
-/* I just don't want to have to link math library for the ceiling function */
-#define CEIL(x)     ( (x) < 0.0 ? (int)(x) : (int)((x)+1.0) )
+/* I just don't want to have to link math library for the ceiling function
+ * Note you can always dispense with math lib and CEIL macro and just precalc
+ * but it would be less transparent in this gist.
+ */
+#define CEIL(x)     ( (x) < 0.0 ? (int)(x) : ( (float)((int)(x)) == (x) ? (int)(x) : (int)((x)+1.0) ) )
 
 static Sample repetitionCountTestA = 0;
 static unsigned int repetitionCountTestB = 1;
@@ -144,6 +147,11 @@ int repetitionCountTest(unsigned char sample)  {
 }
 
 
+/**
+ * Create a very simple circular buffer to track samples as they
+ * are processed. This is only used for debugging purposes and is
+ * not part of the health testing algorithm.
+ */
 struct circularBuffer  {
     Sample buf[_W];
     int i;  /* insertion point */
