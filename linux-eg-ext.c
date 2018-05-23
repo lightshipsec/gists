@@ -206,12 +206,17 @@ static inline int print_entropy_sample( const char *fn, const void *sample, unsi
  *      __mix_pool_bytes
  *
  * From (1), if the parent is mix_pool_bytes, then it's parent can be one of:
+ *      write_pool
  *      add_timer_randomness
  *      add_hwgenerator_randomness
  *
  * From (1), if the parent is __mix_pool_bytes, then it's parent can be one of:
  *      add_interrupt_randomness
  *      extract_buf (which is not an entropy adder and we need to ignore it)
+ *
+ *  If you get write_pool's parent, then it will be:
+ *      random_ioctl
+ *      random_write (which is not an entropy adder and we need to ignore it)
  *
  *  If you get add_timer_randomness's parent, then it will be:
  *      add_input_randomness
@@ -241,6 +246,16 @@ static inline void k_mix_pool_bytes(void *r, const void *in, int nbytes)  {
             goto fend;
         case 'm':
             snprintf(func_name, sizeof(func_name)-1, "%pf", __builtin_return_address( 1 ) );
+#ifdef PRINTIOCTL
+            switch ( func_name[0] ) {
+                case 'w':       /* write_pool */
+                    snprintf(func_name, sizeof(func_name)-1, "%pf", __builtin_return_address( 2 ) );
+                    if ( func_name[0] == 'r' && func_name[7] == 'i' ) { /* random_ioctl */
+                        print_entropy_sample( func_name, in, nbytes );
+                        goto fend;
+                    }
+            }
+#endif
             /* Differentiator at this level is in the 5th byte */
             switch( func_name[4] )  {
                 case 't':       /* add_timer_randomness */
