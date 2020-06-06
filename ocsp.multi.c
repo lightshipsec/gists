@@ -61,6 +61,9 @@
  * Modifications for multiple-CA handling added by Greg McLearn at 
  * Lightship Security, Inc.
  *
+ * This is based on OpenSSL 1.0.2g and likely is compatible with the
+ * entire 1.0.2 branch. No testing for 1.1.x has been attempted.
+ *
  * THESE MODIFICATIONS ARE PROVIDED AS-IS WITHOUT _ANY_ IMPLIED WARRANTY.
  * NO LIABILITY IS ASSUMED BY THE AUTHOR OR LIGHTSHIP SECURITY, INC. OR
  * ITS SUBSIDIARIES.
