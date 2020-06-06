@@ -1173,10 +1173,19 @@ static int make_ocsp_response(OCSP_RESPONSE **resp, OCSP_REQUEST *req,
 
         OCSP_id_get0_info(NULL, NULL, NULL, &serial, cid);
 
-        /* If we have a found_idx because we had a direct CA in our lookup table, then use it. 
-         * Else, cycle through and find the certificate in a given index file db. 
+        /* If we have a found_idx because we had a direct CA in our lookup 
+         * table, then use it. 
          */
-        if(found_idx >= 0) inf = lookup_serial(db[found_idx], serial);
+        if(found_idx >= 0) 
+            inf = lookup_serial(db[found_idx], serial);
+
+        /* Else, consider returning a response anyway even if the CA isn't
+         * a match.  The semantics of this are a bit strange, so code is
+         * commented out. Effectively, it means that the notion of a CA
+         * issuing a cert can be ignored, and the database can be treated
+         * as authoritative, even if wrong or malicious.
+         */
+#if 0
         else  {
             for(int idx = 0; idx < MAX_MULTI_CA; idx ++)  {
                 if(db[idx] && (inf = lookup_serial(db[idx], serial)))  {
@@ -1185,6 +1194,7 @@ static int make_ocsp_response(OCSP_RESPONSE **resp, OCSP_REQUEST *req,
                 }
             }
         }
+#endif
 
         if (!inf)
             OCSP_basic_add1_status(bs, cid,
