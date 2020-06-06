@@ -1,0 +1,524 @@
+--- ocsp.c	2020-04-21 20:32:58.215989189 -0400
++++ ocsp.multi.c	2020-06-06 16:18:24.486103214 -0400
+@@ -56,6 +56,16 @@
+  * Hudson (tjh@cryptsoft.com).
+  *
+  */
++
++/**
++ * Modifications for multiple-CA handling added by Greg McLearn at 
++ * Lightship Security, Inc.
++ *
++ * THESE MODIFICATIONS ARE PROVIDED AS-IS WITHOUT _ANY_ IMPLIED WARRANTY.
++ * NO LIABILITY IS ASSUMED BY THE AUTHOR OR LIGHTSHIP SECURITY, INC. OR
++ * ITS SUBSIDIARIES.
++ */
++
+ #ifndef OPENSSL_NO_OCSP
+ 
+ # ifdef OPENSSL_SYS_VMS
+@@ -97,6 +107,8 @@
+ /* Maximum leeway in validity period: default 5 minutes */
+ # define MAX_VALIDITY_PERIOD     (5 * 60)
+ 
++# define MAX_MULTI_CA   32
++
+ static int add_ocsp_cert(OCSP_REQUEST **req, X509 *cert,
+                          const EVP_MD *cert_id_md, X509 *issuer,
+                          STACK_OF(OCSP_CERTID) *ids);
+@@ -109,9 +121,10 @@
+                               long maxage);
+ 
+ static int make_ocsp_response(OCSP_RESPONSE **resp, OCSP_REQUEST *req,
+-                              CA_DB *db, X509 *ca, X509 *rcert,
+-                              EVP_PKEY *rkey, const EVP_MD *md,
+-                              STACK_OF(X509) *rother, unsigned long flags,
++                              CA_DB **db, X509 **ca, X509 **rcert,
++                              EVP_PKEY **rkey, const EVP_MD **md,
++                              STACK_OF(X509) **rother, 
++                              unsigned long flags,
+                               int nmin, int ndays, int badsig);
+ 
+ static char **lookup_serial(CA_DB *db, ASN1_INTEGER *ser);
+@@ -137,7 +150,7 @@
+     char *reqin = NULL, *respin = NULL;
+     char *reqout = NULL, *respout = NULL;
+     char *signfile = NULL, *keyfile = NULL;
+-    char *rsignfile = NULL, *rkeyfile = NULL;
++    char *rsignfile[MAX_MULTI_CA] = {NULL}, *rkeyfile[MAX_MULTI_CA] = {NULL};
+     char *outfile = NULL;
+     int add_nonce = 1, noverify = 0, use_ssl = -1;
+     STACK_OF(CONF_VALUE) *headers = NULL;
+@@ -145,8 +158,8 @@
+     OCSP_RESPONSE *resp = NULL;
+     OCSP_BASICRESP *bs = NULL;
+     X509 *issuer = NULL, *cert = NULL;
+-    X509 *signer = NULL, *rsigner = NULL;
+-    EVP_PKEY *key = NULL, *rkey = NULL;
++    X509 *signer = NULL, *rsigner[MAX_MULTI_CA] = {NULL};
++    EVP_PKEY *key = NULL, *rkey[MAX_MULTI_CA] = {NULL};
+     BIO *acbio = NULL, *cbio = NULL;
+     BIO *derbio = NULL;
+     BIO *out = NULL;
+@@ -156,8 +169,8 @@
+     char *CAfile = NULL, *CApath = NULL;
+     X509_STORE *store = NULL;
+     X509_VERIFY_PARAM *vpm = NULL;
+-    STACK_OF(X509) *sign_other = NULL, *verify_other = NULL, *rother = NULL;
+-    char *sign_certfile = NULL, *verify_certfile = NULL, *rcertfile = NULL;
++    STACK_OF(X509) *sign_other = NULL, *verify_other = NULL, *rother[MAX_MULTI_CA] = {NULL};
++    char *sign_certfile = NULL, *verify_certfile = NULL, *rcertfile[MAX_MULTI_CA] = {NULL};
+     unsigned long sign_flags = 0, verify_flags = 0, rflags = 0;
+     int ret = 1;
+     int accept_count = -1;
+@@ -167,13 +180,20 @@
+     int ignore_err = 0;
+     STACK_OF(OPENSSL_STRING) *reqnames = NULL;
+     STACK_OF(OCSP_CERTID) *ids = NULL;
+-
+-    X509 *rca_cert = NULL;
+-    char *ridx_filename = NULL;
+-    char *rca_filename = NULL;
+-    CA_DB *rdb = NULL;
++    int responder = 0;
++    /* We keep track of the maximum index seen from the command line.
++     * If the max_idx is never more than 0, then we can perform certain
++     * behaviour as if we are a single-CA responder almost exactly like
++     * the original ocsp mini-application.
++     */
++    int max_idx = 0;
++
++    X509 *rca_cert[MAX_MULTI_CA] = {NULL};
++    char *ridx_filename[MAX_MULTI_CA] = {NULL};
++    char *rca_filename[MAX_MULTI_CA] = {NULL};
++    CA_DB *rdb[MAX_MULTI_CA] = {NULL};
+     int nmin = 0, ndays = -1;
+-    const EVP_MD *cert_id_md = NULL, *rsign_md = NULL;
++    const EVP_MD *cert_id_md = NULL, *rsign_md[MAX_MULTI_CA] = {NULL};
+ 
+     if (bio_err == NULL)
+         bio_err = BIO_new_fp(stderr, BIO_NOCLOSE);
+@@ -412,16 +432,24 @@
+                     goto end;
+             } else
+                 badarg = 1;
+-        } else if (!strcmp(*args, "-index")) {
+-            if (args[1]) {
++        } else if (!strncmp(*args, "-index", 6)) {
++            int idx = atoi(&(*args)[6]);    /* Returns 0 if no digits found */
++            if (args[1] && (idx >= 0 && idx < MAX_MULTI_CA)) {
++                max_idx = (idx > max_idx ? idx : max_idx);
+                 args++;
+-                ridx_filename = *args;
++                ridx_filename[idx] = *args;
+             } else
+                 badarg = 1;
+-        } else if (!strcmp(*args, "-CA")) {
+-            if (args[1]) {
++        } 
++        /* It is very important that this argument is checked AFTER CAfile and CApath
++         * because it uses strncmp instead of strmp.
++         */
++        else if (!strncmp(*args, "-CA", 3)) {
++            int idx = atoi(&(*args)[3]);    /* Returns 0 if no digits found */
++            if (args[1] && (idx >= 0 && idx < MAX_MULTI_CA)) {
++                max_idx = (idx > max_idx ? idx : max_idx);
+                 args++;
+-                rca_filename = *args;
++                rca_filename[idx] = *args;
+             } else
+                 badarg = 1;
+         } else if (!strcmp(*args, "-nmin")) {
+@@ -457,29 +485,37 @@
+                 }
+             } else
+                 badarg = 1;
+-        } else if (!strcmp(*args, "-rsigner")) {
+-            if (args[1]) {
++        } else if (!strncmp(*args, "-rsigner", 8)) {
++            int idx = atoi(&(*args)[8]);    /* Returns 0 if no digits found */
++            if (args[1] && (idx >= 0 && idx < MAX_MULTI_CA)) {
++                max_idx = (idx > max_idx ? idx : max_idx);
+                 args++;
+-                rsignfile = *args;
++                rsignfile[idx] = *args;
+             } else
+                 badarg = 1;
+-        } else if (!strcmp(*args, "-rkey")) {
+-            if (args[1]) {
++        } else if (!strncmp(*args, "-rkey", 5)) {
++            int idx = atoi(&(*args)[5]);    /* Returns 0 if no digits found */
++            if (args[1] && (idx >= 0 && idx < MAX_MULTI_CA)) {
++                max_idx = (idx > max_idx ? idx : max_idx);
+                 args++;
+-                rkeyfile = *args;
++                rkeyfile[idx] = *args;
+             } else
+                 badarg = 1;
+-        } else if (!strcmp(*args, "-rother")) {
+-            if (args[1]) {
++        } else if (!strncmp(*args, "-rother", 7)) {
++            int idx = atoi(&(*args)[7]);    /* Returns 0 if no digits found */
++            if (args[1] && (idx >= 0 && idx < MAX_MULTI_CA)) {
++                max_idx = (idx > max_idx ? idx : max_idx);
+                 args++;
+-                rcertfile = *args;
++                rcertfile[idx] = *args;
+             } else
+                 badarg = 1;
+-        } else if (!strcmp(*args, "-rmd")) {
+-            if (args[1]) {
++        } else if (!strncmp(*args, "-rmd", 4)) {
++            int idx = atoi(&(*args)[4]);    /* Returns 0 if no digits found */
++            if (args[1] && (idx >= 0 && idx < MAX_MULTI_CA)) {
++                max_idx = (idx > max_idx ? idx : max_idx);
+                 args++;
+-                rsign_md = EVP_get_digestbyname(*args);
+-                if (!rsign_md)
++                rsign_md[idx] = EVP_get_digestbyname(*args);
++                if (!rsign_md[idx])
+                     badarg = 1;
+             } else
+                 badarg = 1;
+@@ -489,9 +525,19 @@
+         args++;
+     }
+ 
+-    /* Have we anything to do? */
+-    if (!req && !reqin && !respin && !(port && ridx_filename))
+-        badarg = 1;
++
++    {
++        int good_responder_args = 0;
++        /* What about server side? */
++        for(int i = 0; i < MAX_MULTI_CA; i ++)  {
++            /* Found at least one claimed index file and port argument? */
++            if(ridx_filename[i] && port) { good_responder_args = 1; break; }
++        }
++
++        /* Have we anything to do? */
++        if (!req && !reqin && !respin && !good_responder_args)
++            badarg = 1;
++    }
+ 
+     if (badarg) {
+         BIO_printf(bio_err, "OCSP utility\n");
+@@ -563,14 +609,16 @@
+         BIO_printf(bio_err,
+                    "-port num            port to run responder on\n");
+         BIO_printf(bio_err,
+-                   "-index file          certificate status index file\n");
+-        BIO_printf(bio_err, "-CA file             CA certificate\n");
++                   "-index{N} file       certificate status index file\n");
++        BIO_printf(bio_err, "-CA{N} file          CA certificate \n");
++        BIO_printf(bio_err,
++                   "-rsigner{N} file     responder certificate to sign responses with\n");
+         BIO_printf(bio_err,
+-                   "-rsigner file        responder certificate to sign responses with\n");
++                   "-rkey{N} file        responder key to sign responses with\n");
+         BIO_printf(bio_err,
+-                   "-rkey file           responder key to sign responses with\n");
++                   "-rother{N} file      other certificates to include in response\n");
+         BIO_printf(bio_err,
+-                   "-rother file         other certificates to include in response\n");
++                   "-rmd{N} <dgst alg>   use the given digest algorithm to sign response\n");
+         BIO_printf(bio_err,
+                    "-resp_no_certs       don't include any certificates in response\n");
+         BIO_printf(bio_err,
+@@ -585,6 +633,11 @@
+                    "-<dgst alg>          use specified digest in the request\n");
+         BIO_printf(bio_err,
+                    "-timeout n           timeout connection to OCSP responder after n seconds\n");
++        BIO_printf(bio_err, "\n");
++        BIO_printf(bio_err, "For arguments which contain an optional index suffix {N}, this means that\n"
++                            "any integer between 0 and %d can be used to provide multi-CA support.\n"
++                            "If a numerical suffix is not provided, then a single-CA variant is used.\n",
++                            MAX_MULTI_CA-1);
+         goto end;
+     }
+ 
+@@ -624,28 +677,69 @@
+             goto end;
+     }
+ 
+-    if (rsignfile && !rdb) {
+-        if (!rkeyfile)
+-            rkeyfile = rsignfile;
+-        rsigner = load_cert(bio_err, rsignfile, FORMAT_PEM,
++    /* Cycle through the multiple CA support structures and load and check for sanity. */
++    for(int i = 0; i < MAX_MULTI_CA; i ++)  {
++        if (rsignfile[i] && !rdb[i]) {
++            if (!rkeyfile[i])
++                rkeyfile[i] = rsignfile[i];
++            /* We perform a series of checks to make sure the given files are non-NULL
++             * only when max_idx is > 0. The reason is that load_cert() will load from
++             * stdin if the given filename is NULL.  This is fine when only one CA 
++             * responder is being considered, but gets wildly unmanageable for multiple.
++             * So we just don't allow stdin piping of key certificates and keys when
++             * max_idx > 0.
++             */
++            if(max_idx > 0 && !rsignfile[i])  {
++                BIO_printf(bio_err, "Responder signing key not provided for index %d\n", i);
++                goto end;
++            }
++            rsigner[i] = load_cert(bio_err, rsignfile[i], FORMAT_PEM,
+                             NULL, e, "responder certificate");
+-        if (!rsigner) {
+-            BIO_printf(bio_err, "Error loading responder certificate\n");
+-            goto end;
+-        }
+-        rca_cert = load_cert(bio_err, rca_filename, FORMAT_PEM,
+-                             NULL, e, "CA certificate");
+-        if (rcertfile) {
+-            rother = load_certs(bio_err, rcertfile, FORMAT_PEM,
+-                                NULL, e, "responder other certificates");
+-            if (!rother)
++            if (!rsigner[i]) {
++                BIO_printf(bio_err, "Error loading responder certificate\n");
++                goto end;
++            }
++            if(max_idx > 0 && !rca_filename[i])  {
++                BIO_printf(bio_err, "CA certificate not provided for index %d\n", i);
++                goto end;
++            }
++            rca_cert[i] = load_cert(bio_err, rca_filename[i], FORMAT_PEM,
++                                 NULL, e, "CA certificate");
++            if (rcertfile[i]) {
++                rother[i] = load_certs(bio_err, rcertfile[i], FORMAT_PEM,
++                                    NULL, e, "responder other certificates");
++                if (!rother[i])
++                    goto end;
++            }
++            if(max_idx > 0 && !rkeyfile[i])  {
++                BIO_printf(bio_err, "Responder private key not provided for index %d\n", i);
++                goto end;
++            }
++            rkey[i] = load_key(bio_err, rkeyfile[i], FORMAT_PEM, 0, NULL, NULL,
++                            "responder private key");
++            if (!rkey[i])
+                 goto end;
+         }
+-        rkey = load_key(bio_err, rkeyfile, FORMAT_PEM, 0, NULL, NULL,
+-                        "responder private key");
+-        if (!rkey)
++        if (ridx_filename[i] && (!rkey[i] || !rsigner[i] || !rca_cert[i])) {
++            BIO_printf(bio_err,
++                       "Need a responder certificate, key and CA for responder index file %s for index %d!\n", ridx_filename[i], i);
+             goto end;
++        }
++        else  {
++            if (ridx_filename[i] && !rdb[i]) {
++                rdb[i] = load_index(ridx_filename[i], NULL);
++                if (!rdb[i])
++                    goto end;
++                if (!index_index(rdb[i]))
++                    goto end;
++            }
++            if(rdb[i])  {
++                /* If we get here, we have a fully-defined responder index */
++                responder = 1;
++            }
++        }
+     }
++
+     if (acbio)
+         BIO_printf(bio_err, "Waiting for OCSP client connections...\n");
+ 
+@@ -663,7 +757,7 @@
+         }
+     }
+ 
+-    if (!req && (signfile || reqout || host || add_nonce || ridx_filename)) {
++    if (!req && (signfile || reqout || host || add_nonce || responder)) {
+         BIO_printf(bio_err, "Need an OCSP request for this operation!\n");
+         goto end;
+     }
+@@ -714,23 +808,10 @@
+         BIO_free(derbio);
+     }
+ 
+-    if (ridx_filename && (!rkey || !rsigner || !rca_cert)) {
+-        BIO_printf(bio_err,
+-                   "Need a responder certificate, key and CA for this operation!\n");
+-        goto end;
+-    }
+-
+-    if (ridx_filename && !rdb) {
+-        rdb = load_index(ridx_filename, NULL);
+-        if (!rdb)
+-            goto end;
+-        if (!index_index(rdb))
+-            goto end;
+-    }
+-
+-    if (rdb) {
+-        i = make_ocsp_response(&resp, req, rdb, rca_cert, rsigner, rkey,
+-                               rsign_md, rother, rflags, nmin, ndays, badsig);
++    if (responder) {
++        i = make_ocsp_response(&resp, req, 
++                rdb, rca_cert, rsigner, rkey, rsign_md, rother, 
++                rflags, nmin, ndays, badsig);
+         if (cbio)
+             send_ocsp_response(cbio, resp);
+     } else if (host) {
+@@ -810,7 +891,7 @@
+         }
+         ret = 0;
+         goto end;
+-    } else if (ridx_filename) {
++    } else if (responder) {
+         ret = 0;
+         goto end;
+     }
+@@ -868,12 +949,15 @@
+     if (vpm)
+         X509_VERIFY_PARAM_free(vpm);
+     EVP_PKEY_free(key);
+-    EVP_PKEY_free(rkey);
+     X509_free(issuer);
+     X509_free(cert);
+-    X509_free(rsigner);
+-    X509_free(rca_cert);
+-    free_index(rdb);
++    /* Free up the multi-CA responder structures */
++    for (int i = 0; i < MAX_MULTI_CA; i ++)  {
++        if(rkey[i])     EVP_PKEY_free(rkey[i]);
++        if(rsigner[i])  X509_free(rsigner[i]);
++        if(rca_cert[i]) X509_free(rca_cert[i]);
++        if(rdb[i])      free_index(rdb[i]);
++    }
+     BIO_free_all(cbio);
+     BIO_free_all(acbio);
+     BIO_free(out);
+@@ -1020,15 +1104,17 @@
+ }
+ 
+ static int make_ocsp_response(OCSP_RESPONSE **resp, OCSP_REQUEST *req,
+-                              CA_DB *db, X509 *ca, X509 *rcert,
+-                              EVP_PKEY *rkey, const EVP_MD *rmd,
+-                              STACK_OF(X509) *rother, unsigned long flags,
++                              CA_DB **db, X509 **ca, X509 **rcert,
++                              EVP_PKEY **rkey, const EVP_MD **rmd,
++                              STACK_OF(X509) **rother, 
++                              unsigned long flags,
+                               int nmin, int ndays, int badsig)
+ {
+     ASN1_TIME *thisupd = NULL, *nextupd = NULL;
+     OCSP_CERTID *cid, *ca_id = NULL;
+     OCSP_BASICRESP *bs = NULL;
+     int i, id_count, ret = 1;
++    int found_idx = -1;
+ 
+     id_count = OCSP_request_onereq_count(req);
+ 
+@@ -1047,9 +1133,10 @@
+     for (i = 0; i < id_count; i++) {
+         OCSP_ONEREQ *one;
+         ASN1_INTEGER *serial;
+-        char **inf;
++        char **inf = NULL;
+         ASN1_OBJECT *cert_id_md_oid;
+         const EVP_MD *cert_id_md;
++
+         one = OCSP_request_onereq_get0(req, i);
+         cid = OCSP_onereq_get0_id(one);
+ 
+@@ -1061,34 +1148,62 @@
+                                          NULL);
+             goto end;
+         }
++
+         if (ca_id)
+             OCSP_CERTID_free(ca_id);
+-        ca_id = OCSP_cert_to_id(cert_id_md, NULL, ca);
+ 
+-        /* Is this request about our CA? */
+-        if (OCSP_id_issuer_cmp(ca_id, cid)) {
++        for(int idx = 0; idx < MAX_MULTI_CA; idx ++)  {
++            if(ca[idx] && (ca_id = OCSP_cert_to_id(cert_id_md, NULL, ca[idx])) && !OCSP_id_issuer_cmp(ca_id, cid))  {
++                /* Found a CA that issued this request cert */
++                found_idx = idx;
++                break;
++            }
++        }
++
++        if (found_idx < 0)  {
++            BIO_printf(bio_err, "The certificate request was not issued by any of the known CAs that were loaded.\n");
+             OCSP_basic_add1_status(bs, cid,
+                                    V_OCSP_CERTSTATUS_UNKNOWN,
+                                    0, NULL, thisupd, nextupd);
+             continue;
+         }
++
+         OCSP_id_get0_info(NULL, NULL, NULL, &serial, cid);
+-        inf = lookup_serial(db, serial);
++
++        /* If we have a found_idx because we had a direct CA in our lookup table, then use it. 
++         * Else, cycle through and find the certificate in a given index file db. 
++         */
++        if(found_idx >= 0) inf = lookup_serial(db[found_idx], serial);
++        else  {
++            for(int idx = 0; idx < MAX_MULTI_CA; idx ++)  {
++                if(db[idx] && (inf = lookup_serial(db[idx], serial)))  {
++                    found_idx = idx;
++                    break;
++                }
++            }
++        }
++
+         if (!inf)
+             OCSP_basic_add1_status(bs, cid,
+                                    V_OCSP_CERTSTATUS_UNKNOWN,
+                                    0, NULL, thisupd, nextupd);
+-        else if (inf[DB_type][0] == DB_TYPE_VAL)
++        else if (inf && (inf[DB_type][0] == DB_TYPE_VAL))
+             OCSP_basic_add1_status(bs, cid,
+                                    V_OCSP_CERTSTATUS_GOOD,
+                                    0, NULL, thisupd, nextupd);
+-        else if (inf[DB_type][0] == DB_TYPE_REV) {
++        else if (inf && (inf[DB_type][0] == DB_TYPE_REV))  {
+             ASN1_OBJECT *inst = NULL;
+             ASN1_TIME *revtm = NULL;
+             ASN1_GENERALIZEDTIME *invtm = NULL;
+             OCSP_SINGLERESP *single;
+             int reason = -1;
+-            unpack_revinfo(&revtm, &reason, &inst, &invtm, inf[DB_rev_date]);
++            if (inf && (inf[DB_type][0] == DB_TYPE_REV))
++                unpack_revinfo(&revtm, &reason, &inst, &invtm, inf[DB_rev_date]);
++            else  {
++                *resp = OCSP_response_create(OCSP_RESPONSE_STATUS_INTERNALERROR, NULL);
++                goto end;
++            }
++
+             single = OCSP_basic_add1_status(bs, cid,
+                                             V_OCSP_CERTSTATUS_REVOKED,
+                                             reason, revtm, thisupd, nextupd);
+@@ -1107,7 +1222,19 @@
+ 
+     OCSP_copy_nonce(bs, req);
+ 
+-    OCSP_basic_sign(bs, rcert, rkey, rmd, rother, flags);
++    if(found_idx < 0)  {
++        BIO_printf(bio_err, "The certificate request could not be handled. Signing with the first signing certificate and key pair.\n");
++        /* use the first non-NULL one to response with */
++        for (int idx = 0; idx < MAX_MULTI_CA; idx ++)  {
++            /* Only required are rcert and rkey; rest are optional */
++            if(rcert[idx] && rkey[idx]) { found_idx = idx; break; }
++        }
++    }
++    if(found_idx < 0)  {
++        *resp = OCSP_response_create(OCSP_RESPONSE_STATUS_INTERNALERROR, NULL);
++        goto end;
++    }
++    OCSP_basic_sign(bs, rcert[found_idx], rkey[found_idx], rmd[found_idx], rother[found_idx], flags);
+ 
+     if (badsig)
+         bs->signature->data[bs->signature->length - 1] ^= 0x1;
+@@ -1154,6 +1281,7 @@
+         goto err;
+ # ifndef OPENSSL_NO_SOCK
+     acbio = BIO_new_accept(port);
++    BIO_set_bind_mode(acbio, BIO_BIND_REUSEADDR);
+ # else
+     BIO_printf(bio_err,
+                "Error setting up accept BIO - sockets not supported.\n");
