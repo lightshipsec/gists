@@ -1179,43 +1179,21 @@ static int make_ocsp_response(OCSP_RESPONSE **resp, OCSP_REQUEST *req,
         if(found_idx >= 0) 
             inf = lookup_serial(db[found_idx], serial);
 
-        /* Else, consider returning a response anyway even if the CA isn't
-         * a match.  The semantics of this are a bit strange, so code is
-         * commented out. Effectively, it means that the notion of a CA
-         * issuing a cert can be ignored, and the database can be treated
-         * as authoritative, even if wrong or malicious.
-         */
-#if 0
-        else  {
-            for(int idx = 0; idx < MAX_MULTI_CA; idx ++)  {
-                if(db[idx] && (inf = lookup_serial(db[idx], serial)))  {
-                    found_idx = idx;
-                    break;
-                }
-            }
-        }
-#endif
-
         if (!inf)
             OCSP_basic_add1_status(bs, cid,
                                    V_OCSP_CERTSTATUS_UNKNOWN,
                                    0, NULL, thisupd, nextupd);
-        else if (inf && (inf[DB_type][0] == DB_TYPE_VAL))
+        else if (inf[DB_type][0] == DB_TYPE_VAL)
             OCSP_basic_add1_status(bs, cid,
                                    V_OCSP_CERTSTATUS_GOOD,
                                    0, NULL, thisupd, nextupd);
-        else if (inf && (inf[DB_type][0] == DB_TYPE_REV))  {
+        else if (inf[DB_type][0] == DB_TYPE_REV)  {
             ASN1_OBJECT *inst = NULL;
             ASN1_TIME *revtm = NULL;
             ASN1_GENERALIZEDTIME *invtm = NULL;
             OCSP_SINGLERESP *single;
             int reason = -1;
-            if (inf && (inf[DB_type][0] == DB_TYPE_REV))
-                unpack_revinfo(&revtm, &reason, &inst, &invtm, inf[DB_rev_date]);
-            else  {
-                *resp = OCSP_response_create(OCSP_RESPONSE_STATUS_INTERNALERROR, NULL);
-                goto end;
-            }
+            unpack_revinfo(&revtm, &reason, &inst, &invtm, inf[DB_rev_date]);
 
             single = OCSP_basic_add1_status(bs, cid,
                                             V_OCSP_CERTSTATUS_REVOKED,
@@ -1243,6 +1221,10 @@ static int make_ocsp_response(OCSP_RESPONSE **resp, OCSP_REQUEST *req,
             if(rcert[idx] && rkey[idx]) { found_idx = idx; break; }
         }
     }
+    /* I don't think this should be able to occur, since the only way to get into make_ocsp_response() is
+     * to have a fully-defined responder set anyway.
+     * But leaving for safety sake.
+     */
     if(found_idx < 0)  {
         *resp = OCSP_response_create(OCSP_RESPONSE_STATUS_INTERNALERROR, NULL);
         goto end;
