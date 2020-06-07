@@ -1,5 +1,5 @@
 --- ocsp.c	2020-04-21 20:32:58.215989189 -0400
-+++ ocsp.multi.c	2020-06-06 19:26:32.074441557 -0400
++++ ocsp.multi.c	2020-06-07 10:12:22.677025194 -0400
 @@ -56,6 +56,19 @@
   * Hudson (tjh@cryptsoft.com).
   *
@@ -426,7 +426,7 @@
          one = OCSP_request_onereq_get0(req, i);
          cid = OCSP_onereq_get0_id(one);
  
-@@ -1061,34 +1151,72 @@
+@@ -1061,19 +1151,34 @@
                                           NULL);
              goto end;
          }
@@ -462,51 +462,26 @@
 +        if(found_idx >= 0) 
 +            inf = lookup_serial(db[found_idx], serial);
 +
-+        /* Else, consider returning a response anyway even if the CA isn't
-+         * a match.  The semantics of this are a bit strange, so code is
-+         * commented out. Effectively, it means that the notion of a CA
-+         * issuing a cert can be ignored, and the database can be treated
-+         * as authoritative, even if wrong or malicious.
-+         */
-+#if 0
-+        else  {
-+            for(int idx = 0; idx < MAX_MULTI_CA; idx ++)  {
-+                if(db[idx] && (inf = lookup_serial(db[idx], serial)))  {
-+                    found_idx = idx;
-+                    break;
-+                }
-+            }
-+        }
-+#endif
-+
          if (!inf)
              OCSP_basic_add1_status(bs, cid,
                                     V_OCSP_CERTSTATUS_UNKNOWN,
-                                    0, NULL, thisupd, nextupd);
--        else if (inf[DB_type][0] == DB_TYPE_VAL)
-+        else if (inf && (inf[DB_type][0] == DB_TYPE_VAL))
+@@ -1082,13 +1187,14 @@
              OCSP_basic_add1_status(bs, cid,
                                     V_OCSP_CERTSTATUS_GOOD,
                                     0, NULL, thisupd, nextupd);
 -        else if (inf[DB_type][0] == DB_TYPE_REV) {
-+        else if (inf && (inf[DB_type][0] == DB_TYPE_REV))  {
++        else if (inf[DB_type][0] == DB_TYPE_REV)  {
              ASN1_OBJECT *inst = NULL;
              ASN1_TIME *revtm = NULL;
              ASN1_GENERALIZEDTIME *invtm = NULL;
              OCSP_SINGLERESP *single;
              int reason = -1;
--            unpack_revinfo(&revtm, &reason, &inst, &invtm, inf[DB_rev_date]);
-+            if (inf && (inf[DB_type][0] == DB_TYPE_REV))
-+                unpack_revinfo(&revtm, &reason, &inst, &invtm, inf[DB_rev_date]);
-+            else  {
-+                *resp = OCSP_response_create(OCSP_RESPONSE_STATUS_INTERNALERROR, NULL);
-+                goto end;
-+            }
+             unpack_revinfo(&revtm, &reason, &inst, &invtm, inf[DB_rev_date]);
 +
              single = OCSP_basic_add1_status(bs, cid,
                                              V_OCSP_CERTSTATUS_REVOKED,
                                              reason, revtm, thisupd, nextupd);
-@@ -1107,7 +1235,19 @@
+@@ -1107,7 +1213,23 @@
  
      OCSP_copy_nonce(bs, req);
  
@@ -519,6 +494,10 @@
 +            if(rcert[idx] && rkey[idx]) { found_idx = idx; break; }
 +        }
 +    }
++    /* I don't think this should be able to occur, since the only way to get into make_ocsp_response() is
++     * to have a fully-defined responder set anyway.
++     * But leaving for safety sake.
++     */
 +    if(found_idx < 0)  {
 +        *resp = OCSP_response_create(OCSP_RESPONSE_STATUS_INTERNALERROR, NULL);
 +        goto end;
@@ -527,7 +506,7 @@
  
      if (badsig)
          bs->signature->data[bs->signature->length - 1] ^= 0x1;
-@@ -1154,6 +1294,7 @@
+@@ -1154,6 +1276,7 @@
          goto err;
  # ifndef OPENSSL_NO_SOCK
      acbio = BIO_new_accept(port);
